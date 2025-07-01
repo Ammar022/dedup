@@ -29,11 +29,9 @@ func calculateFilePriority(filename string) int {
 
 	// Patterns for numbered copies (highest priority to delete)
 	numberedPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`\s*\(\d+\)$`),   // file (1), file (2) at end
-		regexp.MustCompile(`\s*\(\d+\)\s*`), // file (1) anywhere in name
-		regexp.MustCompile(`\s*-\s*\d+$`),   // file-1, file-2 at end
-		regexp.MustCompile(`\s*_\d+$`),      // file_1, file_2 at end
-		regexp.MustCompile(`\d+$`),          // file1, file2 at end (numbers only)
+		regexp.MustCompile(`\s*\(\d+\)$`), // file (1), file (2) at end
+		regexp.MustCompile(`\s*-\s*\d+$`), // file-1, file-2 at end
+		regexp.MustCompile(`\s*_\d+$`),    // file_1, file_2 at end
 	}
 
 	// Check for numbered patterns and extract number for sub-priority
@@ -119,11 +117,12 @@ func generateDeletionCommands(filesToDelete []*FileInfo) {
 		return
 	}
 
+	osName := runtime.GOOS
 	fmt.Printf("\n" + strings.Repeat("=", 60))
-	fmt.Printf("\nDELETION COMMANDS FOR %s", strings.ToUpper(runtime.GOOS))
+	fmt.Printf("\nDELETION COMMANDS FOR %s", strings.ToUpper(osName))
 	fmt.Printf("\n" + strings.Repeat("=", 60))
 
-	switch runtime.GOOS {
+	switch osName {
 	case "windows":
 		fmt.Printf("\n# Command Prompt (recommended):\n")
 		for _, file := range filesToDelete {
@@ -207,7 +206,7 @@ func generateDeletionCommands(filesToDelete []*FileInfo) {
 	fmt.Printf("\nSAFETY RECOMMENDATIONS:")
 	fmt.Printf("\n" + strings.Repeat("-", 60))
 
-	switch runtime.GOOS {
+	switch osName {
 	case "windows":
 		fmt.Printf("\n• Test with a few files first before running all commands")
 		fmt.Printf("\n• Consider using PowerShell's -WhatIf parameter to preview actions")
@@ -229,7 +228,7 @@ func generateDeletionCommands(filesToDelete []*FileInfo) {
 	}
 
 	fmt.Printf("\n• Always review the file list before executing any commands!")
-	fmt.Printf("\n• Consider creating a backup of important files first")
+	fmt.Printf("\n• Consider creating a backup of important files first\n")
 }
 
 // findDuplicates finds all duplicate files in the specified folder
@@ -286,8 +285,14 @@ func findDuplicates(folderPath string) error {
 
 			fmt.Printf("\nDuplicate Group #%d (Checksum: %s)\n", duplicateGroups, checksum[:16]+"...")
 			fmt.Printf("File Size: %d bytes\n", files[0].Size)
-			fmt.Println("Files:")
+			fmt.Println("Files with priorities:")
 
+			// Show all files with their priorities for debugging
+			for _, file := range files {
+				fmt.Printf("  Priority %d: %s\n", file.Priority, filepath.Base(file.Path))
+			}
+
+			fmt.Println("Decision:")
 			// First file (lowest priority number) should be kept
 			keepFile := files[0]
 			fmt.Printf("  ✓ KEEP:   %s (Priority: %d)\n", keepFile.Path, keepFile.Priority)
