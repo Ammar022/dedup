@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -231,8 +233,25 @@ func generateDeletionCommands(filesToDelete []*FileInfo) {
 	fmt.Printf("\n• Consider creating a backup of important files first\n")
 }
 
+// deleteFile deletes a file and returns an error if it fails
+func deleteFile(filePath string) error {
+	return os.Remove(filePath)
+}
+
+// confirmDeletion asks the user to confirm deletion
+func confirmDeletion(filesToDelete []*FileInfo) bool {
+	fmt.Printf("\n⚠️  About to delete %d file(s). Continue? [y/N]: ", len(filesToDelete))
+	reader := bufio.NewReader(os.Stdin)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	response = strings.TrimSpace(strings.ToLower(response))
+	return response == "y" || response == "yes"
+}
+
 // findDuplicates finds all duplicate files in the specified folder
-func findDuplicates(folderPath string) error {
+func findDuplicates(folderPath string, deleteMode bool, forceDelete bool, verbose bool) error {
 	// Map to store checksum -> list of files with that checksum
 	checksumMap := make(map[string][]*FileInfo)
 
@@ -242,8 +261,10 @@ func findDuplicates(folderPath string) error {
 		return fmt.Errorf("error reading directory: %v", err)
 	}
 
-	fmt.Printf("Scanning files in: %s\n", folderPath)
-	fmt.Println("Calculating checksums...")
+	if verbose {
+		fmt.Printf("Scanning files in: %s\n", folderPath)
+		fmt.Println("Calculating checksums...")
+	}
 
 	// Process each file (skip directories)
 	for _, entry := range entries {
@@ -253,7 +274,9 @@ func findDuplicates(folderPath string) error {
 
 		filePath := filepath.Join(folderPath, entry.Name())
 
-		fmt.Printf("Processing: %s\n", entry.Name())
+		if verbose {
+			fmt.Printf("Processing: %s\n", entry.Name())
+		}
 
 		fileInfo, err := getFileInfo(filePath)
 		if err != nil {
@@ -266,9 +289,13 @@ func findDuplicates(folderPath string) error {
 	}
 
 	// Find and display duplicates
-	fmt.Println("\n" + strings.Repeat("=", 60))
-	fmt.Println("DUPLICATE FILES REPORT")
-	fmt.Println(strings.Repeat("=", 60))
+	if !verbose {
+		fmt.Printf("\n📁 Scanned %d files in %s\n", len(checksumMap), folderPath)
+	} else {
+		fmt.Println("\n" + strings.Repeat("=", 60))
+		fmt.Println("DUPLICATE FILES REPORT")
+		fmt.Println(strings.Repeat("=", 60))
+	}
 
 	duplicateGroups := 0
 	var filesToDelete []*FileInfo
@@ -283,24 +310,31 @@ func findDuplicates(folderPath string) error {
 				return files[i].Priority < files[j].Priority
 			})
 
-			fmt.Printf("\nDuplicate Group #%d (Checksum: %s)\n", duplicateGroups, checksum[:16]+"...")
-			fmt.Printf("File Size: %d bytes\n", files[0].Size)
-			fmt.Println("Files with priorities:")
+			if verbose {
+				fmt.Printf("\nDuplicate Group #%d (Checksum: %s)\n", duplicateGroups, checksum[:16]+"...")
+				fmt.Printf("File Size: %d bytes\n", files[0].Size)
+				fmt.Println("Files with priorities:")
 
-			// Show all files with their priorities for debugging
-			for _, file := range files {
-				fmt.Printf("  Priority %d: %s\n", file.Priority, filepath.Base(file.Path))
+				// Show all files with their priorities for debugging
+				for _, file := range files {
+					fmt.Printf("  Priority %d: %s\n", file.Priority, filepath.Base(file.Path))
+				}
+
+				fmt.Println("Decision:")
 			}
 
-			fmt.Println("Decision:")
 			// First file (lowest priority number) should be kept
 			keepFile := files[0]
-			fmt.Printf("  ✓ KEEP:   %s (Priority: %d)\n", keepFile.Path, keepFile.Priority)
+			if verbose {
+				fmt.Printf("  ✓ KEEP:   %s (Priority: %d)\n", keepFile.Path, keepFile.Priority)
+			}
 
 			// Rest should be deleted
 			for i := 1; i < len(files); i++ {
 				file := files[i]
-				fmt.Printf("  ✗ DELETE: %s (Priority: %d)\n", file.Path, file.Priority)
+				if verbose {
+					fmt.Printf("  ✗ DELETE: %s (Priority: %d)\n", file.Path, file.Priority)
+				}
 				filesToDelete = append(filesToDelete, file)
 				totalSizeToSave += file.Size
 			}
@@ -308,13 +342,23 @@ func findDuplicates(folderPath string) error {
 	}
 
 	if duplicateGroups == 0 {
-		fmt.Println("\nNo duplicate files found!")
-	} else {
+		fmt.Println("\n✅ No duplicate files found!")
+		return nil
+	}
+
+	// Summary output
+	if verbose {
 		fmt.Printf("\n" + strings.Repeat("=", 60))
 		fmt.Printf("\nDELETION RECOMMENDATIONS")
 		fmt.Printf("\n" + strings.Repeat("=", 60))
+	}
 
-		if len(filesToDelete) > 0 {
+	if len(filesToDelete) > 0 {
+		if !verbose {
+			fmt.Printf("\n🔍 Found %d duplicate group(s)\n", duplicateGroups)
+			fmt.Printf("💾 Can free %.2f MB by deleting %d file(s)\n\n",
+				float64(totalSizeToSave)/(1024*1024), len(filesToDelete))
+		} else {
 			fmt.Printf("\nFiles recommended for deletion:\n")
 			for i, file := range filesToDelete {
 				fmt.Printf("%d. %s\n", i+1, file.Path)
@@ -325,9 +369,49 @@ func findDuplicates(folderPath string) error {
 			fmt.Printf("- Files recommended for deletion: %d\n", len(filesToDelete))
 			fmt.Printf("- Disk space that can be freed: %.2f MB (%.0f bytes)\n",
 				float64(totalSizeToSave)/(1024*1024), float64(totalSizeToSave))
+		}
 
-			// Generate platform-specific deletion commands
-			generateDeletionCommands(filesToDelete)
+		// Delete mode
+		if deleteMode {
+			// Ask for confirmation unless force flag is set
+			if !forceDelete {
+				if !verbose {
+					fmt.Println("Files to delete:")
+					for i, file := range filesToDelete {
+						fmt.Printf("  %d. %s\n", i+1, filepath.Base(file.Path))
+					}
+				}
+				if !confirmDeletion(filesToDelete) {
+					fmt.Println("\n❌ Deletion cancelled.")
+					return nil
+				}
+			}
+
+			// Perform deletion
+			fmt.Println("\n🗑️  Deleting files...")
+			deleted := 0
+			var deletedSize int64
+			for _, file := range filesToDelete {
+				if err := deleteFile(file.Path); err != nil {
+					fmt.Printf("  ❌ Failed to delete %s: %v\n", filepath.Base(file.Path), err)
+				} else {
+					deleted++
+					deletedSize += file.Size
+					if verbose {
+						fmt.Printf("  ✓ Deleted: %s\n", file.Path)
+					}
+				}
+			}
+			fmt.Printf("\n✅ Deleted %d file(s), freed %.2f MB\n", deleted, float64(deletedSize)/(1024*1024))
+		} else {
+			// Show deletion commands only in verbose mode
+			if verbose {
+				generateDeletionCommands(filesToDelete)
+			} else {
+				fmt.Println("💡 Use -d to delete files (with confirmation)")
+				fmt.Println("💡 Use -d -f to delete without confirmation")
+				fmt.Println("💡 Use -v for detailed output")
+			}
 		}
 	}
 
@@ -335,10 +419,16 @@ func findDuplicates(folderPath string) error {
 }
 
 func main() {
-	// Get folder path from command line argument or use current directory
+	// Define flags
+	deleteFlag := flag.Bool("d", false, "Delete duplicate files")
+	forceFlag := flag.Bool("f", false, "Force deletion without confirmation (use with -d)")
+	verboseFlag := flag.Bool("v", false, "Verbose output with detailed information")
+	flag.Parse()
+
+	// Get folder path from remaining arguments or use current directory
 	folderPath := "."
-	if len(os.Args) > 1 {
-		folderPath = os.Args[1]
+	if flag.NArg() > 0 {
+		folderPath = flag.Arg(0)
 	}
 
 	// Verify the path exists and is a directory
@@ -354,7 +444,7 @@ func main() {
 	}
 
 	// Find duplicates
-	if err := findDuplicates(folderPath); err != nil {
+	if err := findDuplicates(folderPath, *deleteFlag, *forceFlag, *verboseFlag); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
